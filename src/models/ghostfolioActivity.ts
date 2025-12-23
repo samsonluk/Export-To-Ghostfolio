@@ -1,5 +1,7 @@
 import { GhostfolioOrderType } from "./ghostfolioOrderType";
 
+export type DataSource = "YAHOO" | "MANUAL" | "COINGECKO" | "POLYGON" | "RAPID_API";
+
 export class GhostfolioActivity {
     accountId: string;
     comment: string;
@@ -8,7 +10,7 @@ export class GhostfolioActivity {
     type: GhostfolioOrderType;
     unitPrice: number;
     currency: string;
-    dataSource: string;
+    dataSource: DataSource;
     date: string;
     symbol: string;
 }

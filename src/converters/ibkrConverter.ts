@@ -12,8 +12,12 @@ import { GhostfolioOrderType } from "../models/ghostfolioOrderType";
 
 export class IbkrConverter extends AbstractConverter {
 
+    private isinOverrides: Map<string, string> = new Map();
+    private manualIsins: Set<string> = new Set();
+
     constructor(securityService: SecurityService) {
         super(securityService);
+        this.loadIsinOverrides();
     }
 
     /**
@@ -106,13 +110,39 @@ export class IbkrConverter extends AbstractConverter {
                     currency === "GBX" ? currency = "GBp" : currency;
 
                     let security: YahooFinanceRecord;
+                    let dataSource = "YAHOO";
+                    
                     try {
-                        security = await this.securityService.getSecurity(
-                            record.isin,
-                            null,
-                            null,
-                            currency,
-                            this.progress);
+                        // Check for ISIN overrides
+                        if (this.isManualIsin(record.isin)) {
+                            // Manual ISIN - create mock security record
+                            security = {
+                                symbol: `GF_${record.isin}`,
+                                currency: currency || 'USD',
+                                name: record.isin
+                            } as YahooFinanceRecord;
+                            dataSource = "MANUAL";
+                        } else {
+                            const symbolOverride = this.getSymbolOverride(record.isin);
+                            
+                            if (symbolOverride) {
+                                // Use override symbol for Yahoo lookup
+                                security = await this.securityService.getSecurity(
+                                    null,
+                                    symbolOverride,
+                                    null,
+                                    currency,
+                                    this.progress);
+                            } else {
+                                // Normal Yahoo lookup
+                                security = await this.securityService.getSecurity(
+                                    record.isin,
+                                    null,
+                                    null,
+                                    currency,
+                                    this.progress);
+                            }
+                        }
                     }
                     catch (err) {
                         this.logQueryError(record.isin, idx + 2);
@@ -197,7 +227,7 @@ export class IbkrConverter extends AbstractConverter {
                         type: type,
                         unitPrice: price,
                         currency: currency,
-                        dataSource: "YAHOO",
+                        dataSource: dataSource,
                         date: date.format("YYYY-MM-DDTHH:mm:ssZ"),
                         symbol: security.symbol
                     });
@@ -264,5 +294,70 @@ export class IbkrConverter extends AbstractConverter {
             a.currency === dividendRecord.currency &&
             a.comment.substring(0, 20) === dividendRecord.description.substring(0, 20) &&
             a.date === dayjs(dividendRecord.date).format("YYYY-MM-DDTHH:mm:ssZ"));
+    }
+        /**
+     * Load ISIN overrides from isin-overrides.txt
+     * Supports: ISIN=ISIN (MANUAL) or ISIN=YAHOO_SYMBOL (override)
+     */
+    private loadIsinOverrides(): void {
+        const fs = require('fs');
+        const path = require('path');
+        const overridePath = path.join(process.cwd(), 'isin-overrides.txt');
+        
+        if (!fs.existsSync(overridePath)) {
+            return;
+        }
+
+        const content = fs.readFileSync(overridePath, 'utf-8');
+        const lines = content.split('\n');
+
+        for (const line of lines) {
+            const trimmed = line.trim();
+            
+            if (!trimmed || trimmed.startsWith('#')) {
+                continue;
+            }
+
+            const parts = trimmed.split('=');
+            if (parts.length !== 2) {
+                continue;
+            }
+
+            const isin = parts[0].trim();
+            const symbol = parts[1].trim();
+            
+            if (!isin || !symbol) {
+                continue;
+            }
+
+            if (isin === symbol) {
+                this.manualIsins.add(isin);
+                console.log(`[IBKR] Marked ${isin} as MANUAL data source`);
+            } else {
+                this.isinOverrides.set(isin, symbol);
+                console.log(`[IBKR] Override: ${isin} -> ${symbol}`);
+            }
+        }
+
+        if (this.manualIsins.size > 0 || this.isinOverrides.size > 0) {
+            console.log(`[IBKR] Loaded ${this.isinOverrides.size} overrides and ${this.manualIsins.size} manual ISINs`);
+        }
+    }
+
+    /**
+     * Check if an ISIN is marked as manual
+     */
+    private isManualIsin(isin: string): boolean {
+        return this.manualIsins.has(isin);
+    }
+
+    /**
+     * Get symbol with override support
+     */
+    private getSymbolOverride(isin: string): string | null {
+        if (this.isinOverrides.has(isin)) {
+            return this.isinOverrides.get(isin)!;
+        }
+        return null;
     }
 }
